@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Protótipo de Biblioteca de Grid Arrastável</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Iconify -->
+    <script src="https://code.iconify.design/2/2.2.1/iconify.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            overflow: hidden; /* Prevent scrollbars from interfering with drag */
+        }
+        .droppable-area {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        .draggable-item {
+            position: absolute;
+            /* Animação mais específica para melhor performance */
+            transition: transform 0.3s cubic-bezier(0.25, 0.8, 0.25, 1), width 0.3s, height 0.3s;
+            user-select: none;
+            touch-action: none; /* For mobile */
+        }
+        .dragging {
+            opacity: 0.8;
+            transform: scale(1.05);
+            cursor: grabbing;
+            z-index: 999;
+            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+            /* Desativa a transição para o item arrastado */
+            transition: none;
+        }
+        .resize-handle {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            bottom: 0;
+            right: 0;
+            cursor: nwse-resize;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: rgba(255, 255, 255, 0.5);
+        }
+        .resize-handle:hover {
+            color: rgba(255, 255, 255, 0.9);
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-white">
+
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useLayoutEffect, useEffect, useRef, useCallback } = React;
+
+        // ==================================
+        // DADOS E CONFIGURAÇÕES INICIAIS
+        // ==================================
+        const BASE_UNIT_WIDTH = 160;
+        const BASE_UNIT_HEIGHT = 100;
+        const GAP = 16;
+
+        const SIZES = {
+            'sm': { w: 1, h: 1 }, // spans 1x1 grid units
+            'md': { w: 2, h: 1 }, // spans 2x1 grid units
+            'lg': { w: 2, h: 2 }, // spans 2x2 grid units
+            'xl': { w: 3, h: 2 }, // spans 3x2 grid units
+        };
+
+        const initialCards = [
+            { id: 1, title: "Card 1", color: 'bg-red-500', size: 'sm' },
+            { id: 2, title: "Card 2", color: 'bg-blue-500', size: 'md' },
+            { id: 3, title: "Card 3", color: 'bg-green-500', size: 'lg' },
+            { id: 4, title: "Card 4", color: 'bg-yellow-500', size: 'sm' },
+            { id: 5, title: "Card 5", color: 'bg-purple-500', size: 'xl' },
+            { id: 6, title: "Card 6", color: 'bg-pink-500', size: 'sm' },
+        ];
+        
+        // ==================================
+        // FUNÇÃO DE REORDENAÇÃO
+        // ==================================
+        const reorder = (list, startIndex, endIndex) => {
+            const result = Array.from(list);
+            const [removed] = result.splice(startIndex, 1);
+            result.splice(endIndex, 0, removed);
+            return result;
+        };
+
+        // ==================================
+        // COMPONENTES DA BIBLIOTECA
+        // ==================================
+        const Draggable = ({ 
+            id, 
+            children,
+            onDragStart,
+            onResizeStart, 
+            style, 
+            className 
+        }) => {
+            return (
+                <div
+                    onMouseDown={(e) => onDragStart(e, id)}
+                    onTouchStart={(e) => onDragStart(e, id)}
+                    className={`draggable-item ${className}`}
+                    style={style}
+                >
+                    {children}
+                    <div 
+                        className="resize-handle"
+                        onMouseDown={(e) => { e.stopPropagation(); onResizeStart(e, id); }}
+                        onTouchStart={(e) => { e.stopPropagation(); onResizeStart(e, id); }}
+                    >
+                        <span className="iconify" data-icon="mdi:resize-bottom-right" data-inline="false"></span>
+                    </div>
+                </div>
+            );
+        };
+        
+        const Card = ({ title, color, onHidden, onSizeChange, id, isMenuOpen, onMenuToggle }) => {
+
+            const handleSizeSelect = (size) => {
+                onSizeChange(id, size);
+                onMenuToggle(id); // Fecha o menu após a seleção
+            };
+
+            return (
+                <div className={`relative w-full h-full p-4 rounded-lg flex items-center justify-center text-center ${color}`}>
+                    
+                    <div className="absolute top-2 left-1/2 -translate-x-1/2 z-30">
+                        <button
+                            onMouseDown={(e) => { e.stopPropagation(); onMenuToggle(id); }}
+                            className="text-white text-opacity-70 hover:text-opacity-100 transition-opacity text-xl"
+                        >
+                            <span className="iconify" data-icon="mdi:dots-horizontal"></span>
+                        </button>
+                        {isMenuOpen && (
+                            <div 
+                                className="absolute top-full mt-2 left-1/2 -translate-x-1/2 bg-slate-700 rounded-md shadow-lg p-2 flex flex-col items-center gap-1"
+                                onMouseDown={e => e.stopPropagation()}
+                                onTouchStart={e => e.stopPropagation()}
+                            >
+                                {Object.keys(SIZES).map(sizeKey => (
+                                    <button
+                                        key={sizeKey}
+                                        onClick={() => handleSizeSelect(sizeKey)}
+                                        className="w-full text-left px-4 py-1 text-sm text-white hover:bg-slate-600 rounded whitespace-nowrap"
+                                    >
+                                        Tamanho {sizeKey.toUpperCase()}
+                                    </button>
+                                ))}
+                                <hr className="w-full border-slate-600 my-1"/>
+                                <button
+                                    onClick={(e) => { e.stopPropagation(); onHidden(); }}
+                                    className="w-full text-left px-4 py-1 text-sm text-red-400 hover:bg-slate-600 rounded"
+                                >
+                                    Ocultar Card
+                                </button>
+                            </div>
+                        )}
+                    </div>
+
+                    <h3 className="text-white font-bold text-lg select-none">{title}</h3>
+                </div>
+            );
+        };
+
+        const Droppable = ({ cards, setCards }) => {
+            const [positions, setPositions] = useState({});
+            const [dragging, setDragging] = useState(null);
+            const [resizing, setResizing] = useState(null);
+            const [activeMenuId, setActiveMenuId] = useState(null);
+            const containerRef = useRef(null);
+            const lastTargetId = useRef(null); 
+
+            const calculateLayout = useCallback(() => {
+                if (!containerRef.current) return;
+                const containerWidth = containerRef.current.offsetWidth;
+                const columns = Math.floor((containerWidth + GAP) / (BASE_UNIT_WIDTH + GAP)) || 1;
+                const grid = new Map();
+                
+                const isAreaFree = (x, y, w, h) => {
+                    if (x + w > columns) return false;
+                    for (let i = y; i < y + h; i++) {
+                        for (let j = x; j < x + w; j++) {
+                            if (grid.has(`${j},${i}`)) return false;
+                        }
+                    }
+                    return true;
+                };
+
+                const placeInGrid = (x, y, w, h, id) => {
+                     for (let i = y; i < y + h; i++) {
+                        for (let j = x; j < x + w; j++) {
+                            grid.set(`${j},${i}`, id);
+                        }
+                    }
+                };
+                
+                const newPositions = {};
+                let unplacedCards = [...cards];
+                let y = 0;
+                
+                while(unplacedCards.length > 0) {
+                    let placedInRow = false;
+                    for(let x = 0; x < columns; x++) {
+                        if(!grid.has(`${x},${y}`)) {
+                            let placedCardIndex = -1;
+                            for (let i=0; i < unplacedCards.length; i++) {
+                                const cardToTest = unplacedCards[i];
+                                const size = SIZES[cardToTest.size];
+                                if(isAreaFree(x, y, size.w, size.h)) {
+                                    placeInGrid(x, y, size.w, size.h, cardToTest.id);
+                                    newPositions[cardToTest.id] = {
+                                        x: x * (BASE_UNIT_WIDTH + GAP),
+                                        y: y * (BASE_UNIT_HEIGHT + GAP),
+                                        w: size.w * BASE_UNIT_WIDTH + (size.w - 1) * GAP,
+                                        h: size.h * BASE_UNIT_HEIGHT + (size.h - 1) * GAP,
+                                    };
+                                    placedCardIndex = i;
+                                    placedInRow = true;
+                                    break;
+                                }
+                            }
+                            if(placedCardIndex !== -1) {
+                                unplacedCards.splice(placedCardIndex, 1);
+                            }
+                        }
+                    }
+                    if(!placedInRow) {
+                        y++;
+                    }
+                }
+                setPositions(newPositions);
+            }, [cards]);
+
+            useLayoutEffect(() => {
+                calculateLayout();
+                const closeMenu = () => setActiveMenuId(null);
+                window.addEventListener('resize', calculateLayout);
+                window.addEventListener('mousedown', closeMenu);
+                return () => {
+                    window.removeEventListener('resize', calculateLayout);
+                    window.removeEventListener('mousedown', closeMenu);
+                }
+            }, [cards, calculateLayout]);
+
+            const handleDragStart = (e, id) => {
+                if (activeMenuId !== null) return;
+                lastTargetId.current = null;
+                const pos = positions[id];
+                if (!pos) return;
+                
+                const eventPos = e.touches ? e.touches[0] : e;
+                setDragging({
+                    id,
+                    initialCardX: pos.x,
+                    initialCardY: pos.y,
+                    x: pos.x,
+                    y: pos.y,
+                    initialMouse: { x: eventPos.clientX, y: eventPos.clientY }
+                });
+            };
+            
+            const handleResizeStart = (e, id) => {
+                 const pos = positions[id];
+                if (!pos) return;
+
+                const eventPos = e.touches ? e.touches[0] : e;
+                setResizing({
+                    id,
+                    initialW: pos.w,
+                    initialH: pos.h,
+                    initialMouse: { x: eventPos.clientX, y: eventPos.clientY }
+                });
+            };
+
+            const handleReorder = useCallback((originId, destinyId) => {
+                setCards(currentCards => {
+                    const originIndex = currentCards.findIndex(c => c.id === originId);
+                    const destinyIndex = currentCards.findIndex(c => c.id === destinyId);
+                    if (originIndex === -1 || destinyIndex === -1 || originIndex === destinyIndex) return currentCards;
+                    return reorder(currentCards, originIndex, destinyIndex);
+                });
+            }, [setCards]);
+            
+            const handleDragMove = useCallback((e) => {
+                if (!dragging) return;
+                const eventPos = e.touches ? e.touches[0] : e;
+                const dx = eventPos.clientX - dragging.initialMouse.x;
+                const dy = eventPos.clientY - dragging.initialMouse.y;
+                
+                const newX = dragging.initialCardX + dx;
+                const newY = dragging.initialCardY + dy;
+
+                setDragging(d => ({...d, x: newX, y: newY }));
+
+                const originId = dragging.id;
+                const originPos = positions[originId];
+                if (!originPos) return;
+
+                const draggedCenterX = newX + originPos.w / 2;
+                const draggedCenterY = newY + originPos.h / 2;
+
+                const targetCard = cards.find(card => {
+                    if (card.id === originId) return false;
+                    const pos = positions[card.id];
+                    return pos && (draggedCenterX > pos.x && draggedCenterX < pos.x + pos.w &&
+                                   draggedCenterY > pos.y && draggedCenterY < pos.y + pos.h);
+                });
+                
+                const destinyId = targetCard ? targetCard.id : null;
+
+                if (destinyId && destinyId !== lastTargetId.current) {
+                    lastTargetId.current = destinyId;
+                    handleReorder(originId, destinyId);
+                }
+            }, [dragging, cards, handleReorder, positions]);
+
+             const handleResizeMove = useCallback((e) => {
+                if (!resizing) return;
+                const eventPos = e.touches ? e.touches[0] : e;
+                const dx = eventPos.clientX - resizing.initialMouse.x;
+                const dy = eventPos.clientY - resizing.initialMouse.y;
+
+                const newWidth = resizing.initialW + dx;
+                const newHeight = resizing.initialH + dy;
+
+                setPositions(prev => ({
+                    ...prev,
+                    [resizing.id]: { ...prev[resizing.id], w: newWidth, h: newHeight }
+                }))
+            }, [resizing]);
+             
+            const handleResizeEnd = useCallback(() => {
+                if(!resizing) return;
+                const pos = positions[resizing.id];
+                const newGridW = Math.max(1, Math.round(pos.w / (BASE_UNIT_WIDTH + GAP)));
+                const newGridH = Math.max(1, Math.round(pos.h / (BASE_UNIT_HEIGHT + GAP)));
+
+                let bestFit = 'sm';
+                let minDiff = Infinity;
+
+                for (const [sizeKey, sizeValue] of Object.entries(SIZES)) {
+                    const diff = Math.abs(sizeValue.w - newGridW) + Math.abs(sizeValue.h - newGridH);
+                    if (diff < minDiff) {
+                        minDiff = diff;
+                        bestFit = sizeKey;
+                    }
+                }
+                
+                setCards(currentCards => 
+                    currentCards.map(c => c.id === resizing.id ? { ...c, size: bestFit } : c)
+                );
+                setResizing(null);
+            }, [resizing, positions, setCards]);
+
+
+            const handleDragEnd = useCallback(() => {
+                setDragging(null);
+                lastTargetId.current = null;
+            }, []);
+
+            useEffect(() => {
+                const isInteracting = dragging || resizing;
+                const handleMove = dragging ? handleDragMove : handleResizeMove;
+                const handleEnd = dragging ? handleDragEnd : handleResizeEnd;
+
+                if (isInteracting) {
+                    window.addEventListener('mousemove', handleMove);
+                    window.addEventListener('mouseup', handleEnd);
+                    window.addEventListener('touchmove', handleMove);
+                    window.addEventListener('touchend', handleEnd);
+                }
+                return () => {
+                    window.removeEventListener('mousemove', handleMove);
+                    window.removeEventListener('mouseup', handleEnd);
+                    window.removeEventListener('touchmove', handleMove);
+                    window.removeEventListener('touchend', handleEnd);
+                };
+            }, [dragging, resizing, handleDragMove, handleDragEnd, handleResizeMove, handleResizeEnd]);
+
+            const handleHide = useCallback((idToHide) => {
+                setCards(currentCards => currentCards.filter(c => c.id !== idToHide));
+            }, [setCards]);
+            
+            const handleSizeChange = useCallback((id, newSize) => {
+                setCards(currentCards => currentCards.map(c => c.id === id ? {...c, size: newSize} : c));
+            }, [setCards]);
+            
+            const handleMenuToggle = useCallback((id) => {
+                setActiveMenuId(prev => prev === id ? null : id);
+            }, []);
+
+            return (
+                <div ref={containerRef} className="droppable-area">
+                    {cards.map((card) => {
+                        const isDragging = dragging?.id === card.id;
+                        const isResizing = resizing?.id === card.id;
+                        const isMenuOpen = activeMenuId === card.id;
+                        const cardPos = positions[card.id] || {x:0, y:0, w:0, h:0};
+                        
+                        let currentPos = { x: cardPos.x, y: cardPos.y };
+                        if (isDragging) {
+                            currentPos = { x: dragging.x, y: dragging.y };
+                        }
+
+                        let currentSize = { w: cardPos.w, h: cardPos.h };
+                        if (isResizing) {
+                           // Live update for resizing visual feedback, if needed
+                        }
+                        
+                        return (
+                            <Draggable
+                                key={card.id}
+                                id={card.id}
+                                onDragStart={handleDragStart}
+                                onResizeStart={handleResizeStart}
+                                className={isDragging ? 'dragging' : ''}
+                                style={{
+                                    width: `${currentSize.w}px`,
+                                    height: `${currentSize.h}px`,
+                                    transform: `translate(${currentPos.x}px, ${currentPos.y}px)`,
+                                    transition: isResizing ? 'none' : undefined,
+                                    zIndex: isMenuOpen ? 50 : (isDragging || isResizing ? 40 : 10),
+                                }}
+                            >
+                                <Card 
+                                    title={card.title} 
+                                    color={card.color} 
+                                    onHidden={() => handleHide(card.id)}
+                                    onSizeChange={handleSizeChange}
+                                    id={card.id}
+                                    isMenuOpen={isMenuOpen}
+                                    onMenuToggle={handleMenuToggle}
+                                />
+                            </Draggable>
+                        );
+                    })}
+                </div>
+            );
+        };
+
+        // ==================================
+        // COMPONENTE PRINCIPAL DA PÁGINA
+        // ==================================
+        const App = () => {
+            const [cards, setCards] = useState(initialCards);
+
+            return (
+                <div className="w-screen h-screen p-4 md:p-8">
+                     <h1 className="text-3xl font-bold text-white mb-6 text-center">Dashboard Interativo</h1>
+                     <div className="w-full h-[calc(100vh-100px)] bg-slate-800 rounded-xl p-4">
+                        <Droppable cards={cards} setCards={setCards} />
+                     </div>
+                </div>
+            );
+        };
+        
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
+        root.render(<App />);
+    </script>
+</body>
+</html>
+
